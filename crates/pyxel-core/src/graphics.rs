@@ -3,7 +3,7 @@ use std::mem::size_of;
 use glow::{HasContext, PixelUnpackData};
 
 use crate::font::RcFont;
-use crate::image::{rgb24_to_rgb8, Color, Rgb24};
+use crate::image::{rgb24_to_rgb8, Color, RcImage, Rgb24};
 use crate::platform::{self, GlProfile};
 use crate::pyxel::{self, Pyxel};
 use crate::settings::{BACKGROUND_COLOR, MAX_COLORS, NUM_SCREEN_MODES};
@@ -42,6 +42,10 @@ const UNIFORM_NAMES: [&str; NUM_UNIFORMS] = [
     "u_colorsTexture",
 ];
 
+// [pyxel-ne] Extra index images a user shader can sample as u_image0..3 (texture units 2..5).
+pub const NUM_SHADER_IMAGES: u32 = 4;
+const MAX_UNIFORM_FLOATS: usize = 1024;
+
 const QUAD_VERTICES: [f32; 8] = [-1.0, 1.0, -1.0, -1.0, 1.0, 1.0, 1.0, -1.0];
 
 pub struct ScreenShader {
@@ -58,6 +62,13 @@ pub struct Graphics {
     colors_texture: glow::NativeTexture,
     cached_colors: Vec<Rgb24>,
     color_pixels: Vec<u8>,
+
+    // [pyxel-ne] User screen shader and its inputs
+    user_shader: Option<ScreenShader>,
+    user_uniforms: Vec<(String, Vec<f32>)>,
+    user_images: [Option<RcImage>; NUM_SHADER_IMAGES as usize],
+    user_textures: [Option<glow::NativeTexture>; NUM_SHADER_IMAGES as usize],
+    display_capture: Option<(String, u32)>,
 }
 
 impl Graphics {
@@ -85,6 +96,11 @@ impl Graphics {
                 colors_texture,
                 cached_colors: Vec::new(),
                 color_pixels: Vec::new(),
+                user_shader: None,
+                user_uniforms: Vec::new(),
+                user_images: Default::default(),
+                user_textures: Default::default(),
+                display_capture: None,
             }
         })
     }
@@ -96,94 +112,104 @@ impl Graphics {
     // Shader setup
 
     unsafe fn create_screen_shaders(gl: &mut glow::Context, is_gles: bool) -> Vec<ScreenShader> {
+        // Compile one program per fragment shader
+        SCREEN_FRAGS
+            .iter()
+            .map(|screen_frag| {
+                Self::build_screen_shader(gl, is_gles, screen_frag).unwrap_or_else(|e| panic!("{e}"))
+            })
+            .collect()
+    }
+
+    // [pyxel-ne] Shared by the built-in modes and the user shader. Returns the GL info log on failure.
+    unsafe fn build_screen_shader(
+        gl: &mut glow::Context,
+        is_gles: bool,
+        screen_frag: &str,
+    ) -> Result<ScreenShader, String> {
         let glsl_version = if is_gles { GLES_VERSION } else { GL_VERSION };
 
-        let mut screen_shaders = Vec::new();
-        // Compile one program per fragment shader
-        for &screen_frag in &SCREEN_FRAGS {
-            // Vertex shader
-            let vertex_shader = gl
-                .create_shader(glow::VERTEX_SHADER)
-                .expect("Failed to create OpenGL vertex shader");
-            gl.shader_source(vertex_shader, &format!("{glsl_version}{COMMON_VERT}"));
-            gl.compile_shader(vertex_shader);
-            assert!(
-                gl.get_shader_compile_status(vertex_shader),
-                "\n[vertex shader]\n{}",
-                gl.get_shader_info_log(vertex_shader)
-            );
-
-            // Fragment shader
-            let fragment_shader = gl
-                .create_shader(glow::FRAGMENT_SHADER)
-                .expect("Failed to create OpenGL fragment shader");
-            gl.shader_source(
-                fragment_shader,
-                &format!("{glsl_version}{COMMON_FRAG}{screen_frag}"),
-            );
-            gl.compile_shader(fragment_shader);
-            assert!(
-                gl.get_shader_compile_status(fragment_shader),
-                "\n[fragment shader]\n{}",
-                gl.get_shader_info_log(fragment_shader)
-            );
-
-            // Shader program
-            let program = gl
-                .create_program()
-                .expect("Failed to create OpenGL shader program");
-            gl.attach_shader(program, vertex_shader);
-            gl.attach_shader(program, fragment_shader);
-            gl.link_program(program);
-            assert!(
-                gl.get_program_link_status(program),
-                "{}",
-                gl.get_program_info_log(program)
-            );
-            gl.detach_shader(program, vertex_shader);
+        // Vertex shader
+        let vertex_shader = gl
+            .create_shader(glow::VERTEX_SHADER)
+            .expect("Failed to create OpenGL vertex shader");
+        gl.shader_source(vertex_shader, &format!("{glsl_version}{COMMON_VERT}"));
+        gl.compile_shader(vertex_shader);
+        if !gl.get_shader_compile_status(vertex_shader) {
+            let log = gl.get_shader_info_log(vertex_shader);
             gl.delete_shader(vertex_shader);
-            gl.detach_shader(program, fragment_shader);
-            gl.delete_shader(fragment_shader);
-
-            // Uniform locations
-            let uniform_locations: [Option<glow::UniformLocation>; NUM_UNIFORMS] =
-                std::array::from_fn(|i| gl.get_uniform_location(program, UNIFORM_NAMES[i]));
-
-            // Vertex array
-            let vertex_array = gl
-                .create_vertex_array()
-                .expect("Failed to create OpenGL vertex array");
-            let vertex_buffer = gl.create_buffer().expect("Failed to create OpenGL buffer");
-
-            gl.bind_vertex_array(Some(vertex_array));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer));
-            gl.buffer_data_u8_slice(
-                glow::ARRAY_BUFFER,
-                QUAD_VERTICES.align_to::<u8>().1,
-                glow::STATIC_DRAW,
-            );
-
-            let position = gl
-                .get_attrib_location(program, "position")
-                .expect("Failed to find OpenGL attribute 'position'");
-            gl.vertex_attrib_pointer_f32(
-                position,
-                2,
-                glow::FLOAT,
-                false,
-                2 * size_of::<f32>() as i32,
-                0,
-            );
-            gl.enable_vertex_attrib_array(position);
-
-            screen_shaders.push(ScreenShader {
-                program,
-                uniform_locations,
-                vertex_array,
-            });
+            return Err(format!("\n[vertex shader]\n{log}"));
         }
 
-        screen_shaders
+        // Fragment shader
+        let fragment_shader = gl
+            .create_shader(glow::FRAGMENT_SHADER)
+            .expect("Failed to create OpenGL fragment shader");
+        gl.shader_source(
+            fragment_shader,
+            &format!("{glsl_version}{COMMON_FRAG}{screen_frag}"),
+        );
+        gl.compile_shader(fragment_shader);
+        if !gl.get_shader_compile_status(fragment_shader) {
+            let log = gl.get_shader_info_log(fragment_shader);
+            gl.delete_shader(vertex_shader);
+            gl.delete_shader(fragment_shader);
+            return Err(format!("\n[fragment shader]\n{log}"));
+        }
+
+        // Shader program
+        let program = gl
+            .create_program()
+            .expect("Failed to create OpenGL shader program");
+        gl.attach_shader(program, vertex_shader);
+        gl.attach_shader(program, fragment_shader);
+        gl.link_program(program);
+        gl.detach_shader(program, vertex_shader);
+        gl.delete_shader(vertex_shader);
+        gl.detach_shader(program, fragment_shader);
+        gl.delete_shader(fragment_shader);
+        if !gl.get_program_link_status(program) {
+            let log = gl.get_program_info_log(program);
+            gl.delete_program(program);
+            return Err(log);
+        }
+
+        // Uniform locations
+        let uniform_locations: [Option<glow::UniformLocation>; NUM_UNIFORMS] =
+            std::array::from_fn(|i| gl.get_uniform_location(program, UNIFORM_NAMES[i]));
+
+        // Vertex array
+        let vertex_array = gl
+            .create_vertex_array()
+            .expect("Failed to create OpenGL vertex array");
+        let vertex_buffer = gl.create_buffer().expect("Failed to create OpenGL buffer");
+
+        gl.bind_vertex_array(Some(vertex_array));
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(vertex_buffer));
+        gl.buffer_data_u8_slice(
+            glow::ARRAY_BUFFER,
+            QUAD_VERTICES.align_to::<u8>().1,
+            glow::STATIC_DRAW,
+        );
+
+        let position = gl
+            .get_attrib_location(program, "position")
+            .expect("Failed to find OpenGL attribute 'position'");
+        gl.vertex_attrib_pointer_f32(
+            position,
+            2,
+            glow::FLOAT,
+            false,
+            2 * size_of::<f32>() as i32,
+            0,
+        );
+        gl.enable_vertex_attrib_array(position);
+
+        Ok(ScreenShader {
+            program,
+            uniform_locations,
+            vertex_array,
+        })
     }
 
     // Texture setup
@@ -460,9 +486,11 @@ impl Pyxel {
         platform::with_gl_context(|gl| unsafe {
             self.set_viewport(gl, window_width, window_height);
             self.use_screen_shader(gl, window_height);
+            self.bind_user_shader_inputs(gl);
             self.bind_screen_texture(gl);
             self.bind_colors_texture(gl);
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+            self.save_display_capture(gl, window_width, window_height);
         });
     }
 
@@ -471,8 +499,11 @@ impl Pyxel {
     }
 
     unsafe fn use_screen_shader(&self, gl: &mut glow::Context, window_height: u32) {
-        let shader =
-            &self.graphics.as_ref().unwrap().screen_shaders[self.system.screen_mode as usize];
+        let graphics = self.graphics.as_ref().unwrap();
+        let shader = graphics
+            .user_shader
+            .as_ref()
+            .unwrap_or(&graphics.screen_shaders[self.system.screen_mode as usize]);
         gl.use_program(Some(shader.program));
         let uniforms = &shader.uniform_locations;
 
@@ -626,5 +657,174 @@ impl Pyxel {
             );
         }
         graphics.cached_colors.clone_from(&colors);
+    }
+
+    // [pyxel-ne] User screen shader
+
+    /// Replace the screen shader with `code`, a fragment shader body appended after common.frag.
+    /// `None` restores the built-in shader picked by `screen_mode`. On a compile error the previous
+    /// shader stays active and the GL log is returned.
+    pub fn set_screen_shader(&mut self, code: Option<&str>) -> Result<(), String> {
+        let Some(graphics) = self.graphics.as_mut() else {
+            return Ok(()); // Headless: nothing to draw with.
+        };
+        // SAFETY: The platform keeps the GL context current; Graphics owns the replaced program.
+        platform::with_gl_context(|gl| unsafe {
+            let shader = match code {
+                Some(code) => Some(Graphics::build_screen_shader(gl, graphics.is_gles, code)?),
+                None => None,
+            };
+            if let Some(old) = std::mem::replace(&mut graphics.user_shader, shader) {
+                gl.delete_program(old.program);
+                gl.delete_vertex_array(old.vertex_array);
+            }
+            Ok(())
+        })
+    }
+
+    /// Set a float, vec2, vec3, vec4 (1-4 values) or vec4[] (a multiple of 4 values) uniform.
+    pub fn set_shader_uniform(&mut self, name: &str, values: &[f32]) -> Result<(), String> {
+        let n = values.len();
+        if n == 0 || n > MAX_UNIFORM_FLOATS || (n > 4 && n % 4 != 0) {
+            return Err(format!(
+                "uniform '{name}' needs 1-4 values or a multiple of 4 up to {MAX_UNIFORM_FLOATS}, got {n}"
+            ));
+        }
+        let Some(graphics) = self.graphics.as_mut() else {
+            return Ok(());
+        };
+        match graphics.user_uniforms.iter_mut().find(|(k, _)| k == name) {
+            Some((_, v)) => values.clone_into(v),
+            None => graphics.user_uniforms.push((name.to_string(), values.to_vec())),
+        }
+        Ok(())
+    }
+
+    /// Let the user shader sample `image` (raw color indices) as `u_image{slot}`, sized `u_imageSize{slot}`.
+    pub fn set_shader_image(&mut self, slot: u32, image: Option<RcImage>) -> Result<(), String> {
+        if slot >= NUM_SHADER_IMAGES {
+            return Err(format!("slot must be 0-{}", NUM_SHADER_IMAGES - 1));
+        }
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.user_images[slot as usize] = image;
+        }
+        Ok(())
+    }
+
+    unsafe fn bind_user_shader_inputs(&mut self, gl: &mut glow::Context) {
+        let graphics = self.graphics.as_mut().unwrap();
+        let Some(shader) = graphics.user_shader.as_ref() else {
+            return;
+        };
+        let program = shader.program;
+
+        for (name, values) in &graphics.user_uniforms {
+            let Some(location) = gl.get_uniform_location(program, name) else {
+                continue; // Unused uniforms are optimized out; that is not an error.
+            };
+            match values.len() {
+                1 => gl.uniform_1_f32(Some(&location), values[0]),
+                2 => gl.uniform_2_f32_slice(Some(&location), values),
+                3 => gl.uniform_3_f32_slice(Some(&location), values),
+                _ => gl.uniform_4_f32_slice(Some(&location), values),
+            }
+        }
+
+        let (internal_format, format) = if graphics.is_gles {
+            (glow::LUMINANCE as i32, glow::LUMINANCE)
+        } else {
+            (glow::R8 as i32, glow::RED)
+        };
+        for slot in 0..NUM_SHADER_IMAGES as usize {
+            let Some(image) = graphics.user_images[slot].clone() else {
+                continue;
+            };
+            let texture = *graphics.user_textures[slot].get_or_insert_with(|| {
+                let texture = gl
+                    .create_texture()
+                    .expect("Failed to create OpenGL shader image texture");
+                gl.active_texture(glow::TEXTURE2 + slot as u32);
+                gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+                Graphics::set_texture_nearest_clamp(gl);
+                texture
+            });
+            gl.active_texture(glow::TEXTURE2 + slot as u32);
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+
+            let image = rc_ref!(image);
+            let width = image.width() as i32;
+            let height = image.height() as i32;
+            // Re-upload every frame: shader images are small and usually redrawn each frame.
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                internal_format,
+                width,
+                height,
+                0,
+                format,
+                glow::UNSIGNED_BYTE,
+                PixelUnpackData::Slice(Some(&image.canvas.data)),
+            );
+            if let Some(location) = gl.get_uniform_location(program, &format!("u_image{slot}")) {
+                gl.uniform_1_i32(Some(&location), 2 + slot as i32);
+            }
+            if let Some(location) = gl.get_uniform_location(program, &format!("u_imageSize{slot}")) {
+                gl.uniform_2_f32(Some(&location), width as f32, height as f32);
+            }
+        }
+    }
+
+    // [pyxel-ne] Display capture: the shaded output, which screenshot() cannot see
+
+    /// Save the next rendered frame as it appears in the window (after the screen shader),
+    /// sampled at each screen pixel's centre and scaled by `scale`.
+    pub fn request_display_capture(&mut self, filename: &str, scale: u32) {
+        if let Some(graphics) = self.graphics.as_mut() {
+            graphics.display_capture = Some((filename.to_string(), scale.max(1)));
+        }
+    }
+
+    unsafe fn save_display_capture(&mut self, gl: &mut glow::Context, window_width: u32, window_height: u32) {
+        let Some((filename, scale)) = self.graphics.as_mut().unwrap().display_capture.take() else {
+            return;
+        };
+        let mut pixels = vec![0u8; (window_width * window_height * 4) as usize];
+        gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+        gl.read_pixels(
+            0,
+            0,
+            window_width as i32,
+            window_height as i32,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelPackData::Slice(Some(&mut pixels)),
+        );
+
+        let width = *pyxel::width();
+        let height = *pyxel::height();
+        let screen_scale = self.system.screen_scale;
+        let mut image = image::RgbImage::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let wx = self.system.screen_x as f32 + (x as f32 + 0.5) * screen_scale;
+                let wy = self.system.screen_y as f32 + (y as f32 + 0.5) * screen_scale;
+                let gx = (wx as u32).min(window_width - 1);
+                let gy = (window_height - 1).saturating_sub(wy as u32); // GL rows run bottom-up.
+                let i = ((gy * window_width + gx) * 4) as usize;
+                image.put_pixel(x, y, image::Rgb([pixels[i], pixels[i + 1], pixels[i + 2]]));
+            }
+        }
+        let image = image::imageops::resize(
+            &image,
+            width * scale,
+            height * scale,
+            image::imageops::FilterType::Nearest,
+        );
+        let filename = crate::utils::add_file_extension(&filename, ".png");
+        if image.save(&filename).is_err() {
+            println!("Failed to save file '{filename}'");
+        }
     }
 }

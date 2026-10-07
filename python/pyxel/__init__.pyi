@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import (
     Any,
     overload,
@@ -1335,6 +1335,55 @@ def screen_mode(scr: int) -> None:
 
     Args:
         scr: Screen mode number (0: crisp, 1: smooth, 2: retro)
+    """
+
+# [pyxel-ne] User screen shader
+
+NE: bool
+NUM_SHADER_IMAGES: int
+
+def screen_shader(code: str | None = None) -> None:
+    """Replace the screen shader with a GLSL ES 1.0 fragment shader body (pyxel-ne).
+
+    The code is appended after Pyxel's common.frag, so it can use u_screenPos, u_screenSize,
+    u_screenScale, u_numColors, u_backgroundColor, u_screenTexture, u_colorsTexture,
+    getScreenParams(), isInScreen() and getScreenColor(). It must define main().
+    None restores the built-in shader selected by screen_mode().
+
+    Args:
+        code: Fragment shader source, or None
+
+    Raises:
+        ValueError: The shader failed to compile or link. The previous shader stays active.
+    """
+
+def shader_uniform(name: str, values: float | Sequence[float]) -> None:
+    """Set a uniform on the user shader (pyxel-ne). Values persist until set again.
+
+    Args:
+        name: Uniform name
+        values: 1-4 floats (float, vec2, vec3, vec4) or a multiple of 4 floats (vec4 array)
+    """
+
+def shader_image(slot: int, img: Image | None = None) -> None:
+    """Let the user shader sample an image's raw color indices (pyxel-ne).
+
+    The shader reads it as `uniform sampler2D u_image{slot}`; index = texture2D(...).r * 255.0.
+    Its size is `uniform vec2 u_imageSize{slot}`. The image is uploaded every frame.
+
+    Args:
+        slot: 0 to NUM_SHADER_IMAGES - 1
+        img: Image, or None to unbind
+    """
+
+def display_capture(filename: str, scale: int = 1) -> None:
+    """Save the next rendered frame as shown in the window, after the screen shader (pyxel-ne).
+
+    Unlike screenshot(), this sees the shader output. The file is written after the current draw.
+
+    Args:
+        filename: PNG path (.png is added if missing)
+        scale: Integer scale of the saved image
     """
 
 def fullscreen(enabled: bool) -> None:

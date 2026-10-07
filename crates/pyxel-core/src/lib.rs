@@ -62,6 +62,7 @@ use platform::key;
 pub use crate::audio::AudioLock;
 pub use crate::channel::{Channel, ChannelDetune, ChannelGain, RcChannel};
 pub use crate::font::{Font, RcFont};
+pub use crate::graphics::NUM_SHADER_IMAGES;
 pub use crate::image::{Color, Image, RcImage, Rgb24};
 pub use crate::key::*;
 pub use crate::music::{Music, RcMusic};
