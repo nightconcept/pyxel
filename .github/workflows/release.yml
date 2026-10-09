@@ -3,7 +3,7 @@ name: release
 on:
   push:
     tags:
-      - "v*"
+      - "ne-v*" # [pyxel-ne] Fork releases only: GitHub release, no PyPI.
 
 permissions:
   contents: write
@@ -34,7 +34,7 @@ jobs:
 
       - name: Get Pyxel version
         run: |
-          PYXEL_VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/v//')
+          PYXEL_VERSION=$(echo $GITHUB_REF | sed 's/refs\/tags\/ne-v//')
           echo "PYXEL_VERSION=${PYXEL_VERSION}" >> $GITHUB_ENV
 
       - name: Detect pre-release
@@ -48,20 +48,7 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: Pyxel ${{ env.PYXEL_VERSION }}
+          name: pyxel-ne ${{ env.PYXEL_VERSION }}
           tag_name: ${{ github.ref }}
           files: dist/*
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-
-      - name: Install Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Publish to PyPI
-        run: |
-          pip install twine
-          twine upload dist/*
-        env:
-          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
-          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
