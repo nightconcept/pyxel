@@ -69,6 +69,21 @@ mise run build   # the wheel for this machine, into dist/
 On macOS the tasks use Apple clang, because a non-Apple `cc` earlier on PATH cannot find `-liconv`.
 Other platforms and the wasm build are not built locally yet.
 
+## Release
+
+A release is a GitHub release with the wheels for every platform. There is no PyPI upload.
+
+```sh
+# Bump the version in python/pyproject.toml (2.9.9+ne.2 -> 2.9.9+ne.3), commit, and push nightengine.
+git tag -a ne-v2.9.9.3 -m "pyxel-ne 2.9.9+ne.3: <what changed>"
+git push origin ne-v2.9.9.3
+```
+
+The tag runs `.github/workflows/release.yml`: it builds and checks the wheels (macOS x86_64 and arm64, Linux
+x86_64, aarch64, and armv7, Windows x64 and x86) and makes the release `pyxel-ne <version>`. A game installs it with
+`pyxel==<version>` and `find-links` to `https://github.com/nightconcept/pyxel/releases/expanded_assets/<tag>`.
+The CI doc generators drop the docstrings of the fork's functions from the built stubs.
+
 ## TODO
 
 - Test vsync in WASM builds. The wasm wheel in `wasm/` is stock 2.9.9, and `wasm/pyxel.js` reads the version
