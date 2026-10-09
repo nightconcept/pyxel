@@ -90,6 +90,7 @@ extern "C" {
     fn emscripten_get_now() -> f64;
 }
 
+// [pyxel-ne] TODO: test vsync in WASM builds. Desktop only for now: in a page this ignores the vsync flag.
 #[cfg(target_os = "emscripten")]
 unsafe extern "C" fn main_loop_callback<F: FnMut(f32)>(arg: *mut c_void) {
     // SAFETY: run_frame_loop passes a non-null Box<MainLoopState<F>> as arg;
@@ -471,8 +472,26 @@ impl PlatformSdl2 {
         let frame_ms = 1000.0 / fps as f32;
         let mut next_frame_ms = unsafe { SDL_GetTicks() } as f32;
         let mut last_frame_ms = next_frame_ms;
+        let mut last_counter: Option<u64> = None;
 
         loop {
+            // [pyxel-ne] With vsync on, the swap blocks until the refresh, so the monitor sets the
+            // pace. No sleep, and the delta comes from the high resolution counter.
+            if super::super::facade::vsync_enabled() {
+                let now = unsafe { SDL_GetPerformanceCounter() };
+                let delta_ms = last_counter.map_or(0.0, |last| {
+                    (now - last) as f64 * 1000.0 / unsafe { SDL_GetPerformanceFrequency() } as f64
+                });
+                last_counter = Some(now);
+                callback(delta_ms as f32);
+                super::super::facade::swap_window();
+                // When vsync goes off again, the timer starts from now and does not catch up.
+                next_frame_ms = unsafe { SDL_GetTicks() } as f32;
+                last_frame_ms = next_frame_ms;
+                continue;
+            }
+            last_counter = None;
+
             // Busy-wait with short sleeps until the next frame time
             loop {
                 let remaining_ms = next_frame_ms - unsafe { SDL_GetTicks() } as f32;
@@ -494,6 +513,10 @@ impl PlatformSdl2 {
         }
     }
 
+    // [pyxel-ne] TODO: test vsync in WASM builds. Desktop only for now: in a page this ignores the vsync flag.
+    // Later: with vsync on, skip advance_frame_schedule and run the callback on every
+    // requestAnimationFrame with delta_ms = now - last. Never call advance_frame_schedule with
+    // frame_ms <= 0 (it loops forever).
     #[cfg(target_os = "emscripten")]
     pub fn run_frame_loop<F: FnMut(f32)>(fps: u32, callback: F) {
         // Drive the loop with requestAnimationFrame (fps = 0); browsers keep
@@ -517,6 +540,13 @@ impl PlatformSdl2 {
 
     #[cfg(not(target_os = "emscripten"))]
     pub fn step_frame(&mut self, fps: u32) {
+        // [pyxel-ne] With vsync on, swap with no wait: the swap blocks until the refresh.
+        if super::super::facade::vsync_enabled() {
+            self.swap_window();
+            self.next_update_ms = None;
+            return;
+        }
+
         let frame_ms = 1000.0 / fps as f32;
         let mut next_frame_ms = self.next_update_ms.unwrap_or(self.ticks() as f32);
 
@@ -542,6 +572,32 @@ impl PlatformSdl2 {
     #[cfg(target_os = "emscripten")]
     pub fn step_frame(&mut self, _fps: u32) {
         panic!("pyxel.flip is not supported on Pyxel Web");
+    }
+
+    // [pyxel-ne] Vsync
+
+    #[cfg(not(target_os = "emscripten"))]
+    pub fn set_swap_interval(&mut self, on: bool) -> i32 {
+        if self.window.is_null() {
+            return 0;
+        }
+        if !on {
+            unsafe { SDL_GL_SetSwapInterval(0) };
+            return 0;
+        }
+        // Late swap tearing (-1) first; plain vsync (1) if the driver refuses it.
+        for interval in [-1, 1] {
+            if unsafe { SDL_GL_SetSwapInterval(interval) } == 0 {
+                return interval;
+            }
+        }
+        0
+    }
+
+    // [pyxel-ne] TODO: test vsync in WASM builds. Desktop only for now: in a page this ignores the vsync flag.
+    #[cfg(target_os = "emscripten")]
+    pub fn set_swap_interval(&mut self, _on: bool) -> i32 {
+        0
     }
 
     // OpenGL

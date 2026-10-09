@@ -10,7 +10,9 @@ use crate::pyxel_singleton::pyxel;
 #[pyfunction]
 #[pyo3(signature = (code=None))]
 fn screen_shader(code: Option<&str>) -> PyResult<()> {
-    pyxel().set_screen_shader(code).map_err(PyValueError::new_err)
+    pyxel()
+        .set_screen_shader(code)
+        .map_err(PyValueError::new_err)
 }
 
 #[pyfunction]

@@ -1386,6 +1386,25 @@ def display_capture(filename: str, scale: int = 1) -> None:
         scale: Integer scale of the saved image
     """
 
+# [pyxel-ne] Display pacing
+
+NE_PACING: bool
+
+def vsync(on: bool) -> int:
+    """Let the monitor pace the frame loop: one update and one draw for each refresh, no catch-up (pyxel-ne).
+
+    Desktop only: in a page it does nothing and returns 0. Applies at once.
+
+    Args:
+        on: Enable vsync
+
+    Returns:
+        The swap interval in use: -1 (late swap tearing), 1, or 0 (vsync off, or the driver refused it).
+    """
+
+def vsync_enabled() -> bool:
+    """Return whether vsync paces the frame loop now (pyxel-ne)."""
+
 def fullscreen(enabled: bool) -> None:
     """Set whether to run in fullscreen mode.
 

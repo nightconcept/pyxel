@@ -1,0 +1,32 @@
+# [pyxel-ne] The build tools. `mise install`, then `mise run test`, `mise run lint`, or `mise run build`.
+# The Rust nightly matches rust-toolchain.toml (it is needed for the rustfmt options).
+[tools]
+rust = { version = "nightly-2026-08-12", components = "clippy,rustfmt" }
+cmake = "latest"
+uv = "latest"
+
+# On macOS each task uses Apple clang: a non-Apple `cc` earlier on PATH cannot find -liconv.
+[tasks.test]
+description = "Run the pyxel-core tests"
+run = '''
+[ "$(uname)" = Darwin ] && export CC=/usr/bin/clang CXX=/usr/bin/clang++ CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang
+cargo test --manifest-path crates/Cargo.toml -p pyxel-core --features sdl2_static
+'''
+
+[tasks.lint]
+description = "Check the format and run clippy"
+run = '''
+[ "$(uname)" = Darwin ] && export CC=/usr/bin/clang CXX=/usr/bin/clang++ CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang
+cd crates
+cargo fmt --all --check
+cargo clippy --features sdl2_static
+'''
+
+[tasks.build]
+description = "Build the wheel for this machine into dist/"
+run = '''
+[ "$(uname)" = Darwin ] && export CC=/usr/bin/clang CXX=/usr/bin/clang++ CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang
+cp LICENSE README.md python/pyxel/
+cd python
+uvx maturin build -o ../dist --release --features sdl2_static
+'''

@@ -39,6 +39,7 @@ mod audio_wrapper;
 mod graphics_wrapper;
 mod input_wrapper;
 mod math_wrapper;
+mod pacing_wrapper;
 mod resource_wrapper;
 mod shader_wrapper;
 mod system_wrapper;
@@ -63,6 +64,7 @@ fn pyxel_binding(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     // Module-level API functions
     system_wrapper::add_system_functions(&m)?;
     shader_wrapper::add_shader_functions(&m)?;
+    pacing_wrapper::add_pacing_functions(&m)?;
     resource_wrapper::add_resource_functions(&m)?;
     input_wrapper::add_input_functions(&m)?;
     graphics_wrapper::add_graphics_functions(&m)?;

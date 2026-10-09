@@ -1,7 +1,8 @@
 # pyxel-ne
 
-A small fork of Pyxel that lets a game install its own screen shader.
-It was built for Thunderwing (`../raiden`) dynamic lighting. All changes are marked `[pyxel-ne]`.
+A small fork of Pyxel that lets a game install its own screen shader and let the monitor pace the frame loop
+(vsync). The shaders were built for Thunderwing (`../raiden`) dynamic lighting, and vsync for Nightrunner's
+display pacing. All changes are marked `[pyxel-ne]`.
 
 ## Branches
 
@@ -15,7 +16,7 @@ To take a new Pyxel release, rebase. Do not merge.
 git fetch upstream
 git switch main && git merge --ff-only upstream/main && git push origin main
 git switch nightengine && git rebase upstream/main
-# Rebuild and test, then bump the version in python/pyproject.toml (2.9.9+ne.1 -> <new>+ne.1).
+# Rebuild and test, then bump the version in python/pyproject.toml (2.9.9+ne.2 -> <new>+ne.1).
 git push --force-with-lease origin nightengine
 ```
 
@@ -30,6 +31,9 @@ Conflicts are most likely in `crates/pyxel-core/src/graphics.rs`, around `create
 | `pyxel.shader_image(slot, img)` | Bind an `Image` (raw colour indices) as `u_image{slot}`, sized `u_imageSize{slot}`. Slots 0–3, texture units 2–5. The image is uploaded each frame. |
 | `pyxel.display_capture(filename, scale=1)` | Save the next rendered frame as shown in the window, after the shader. `screenshot()` cannot see shader output. |
 | `pyxel.NE`, `pyxel.NUM_SHADER_IMAGES` | Feature check (`getattr(pyxel, "NE", False)`) and slot count. |
+| `pyxel.vsync(on)` | On: the loop does not sleep, runs one `update` and one `draw` for each loop (no catch-up), and swaps with swap interval -1 (late swap tearing), or 1 if the driver refuses -1. The swap blocks until the refresh. Off: the timer loop. Applies at once. Returns the interval in use; 0 means vsync is off (headless, a page, or a driver that refuses). Desktop only. |
+| `pyxel.vsync_enabled()` | Whether vsync paces the loop now. |
+| `pyxel.NE_PACING` | Feature check for `vsync` (`getattr(pyxel, "NE_PACING", False)`). |
 
 The user shader gets everything in `crates/pyxel-core/src/shaders/common.frag`:
 `getScreenParams`, `isInScreen`, `getScreenColor`, and the `u_screen*` uniforms.
@@ -39,17 +43,33 @@ The user shader gets everything in `crates/pyxel-core/src/shaders/common.frag`:
 - `crates/pyxel-core/src/graphics.rs`: `build_screen_shader` returns `Err(log)` instead of asserting. Adds the user
   shader, the uniform store, the shader images, and the display capture.
 - `crates/pyxel-binding/src/shader_wrapper.rs`: the Python functions.
-- `python/pyxel/__init__.pyi`: stubs. `python/pyproject.toml`: version `2.9.9+ne.1`.
+- `crates/pyxel-core/src/system.rs`: `update_count` (one update for each loop with vsync on), `set_vsync`,
+  `vsync_enabled`.
+- `crates/pyxel-core/src/platform/facade.rs` and `mod.rs`: the vsync flag (`AtomicBool`) and
+  `set_swap_interval`.
+- `crates/pyxel-core/src/platform/sdl2/platform_sdl2.rs`: `set_swap_interval`; with vsync on, `run_frame_loop`
+  skips the sleep and measures the delta with `SDL_GetPerformanceCounter`, and `step_frame` swaps with no wait.
+  The emscripten path is unchanged.
+- `crates/pyxel-binding/src/pacing_wrapper.rs`: the Python functions.
+- `python/pyxel/__init__.pyi`: stubs. `python/pyproject.toml`: version `2.9.9+ne.2`.
+- `mise.toml`: the build tools and tasks.
 
-## Build (macOS arm64)
+## Build
+
+[mise](https://mise.jdx.dev) installs the tools: the Rust nightly from `rust-toolchain.toml` (with clippy and
+rustfmt), CMake, and uv.
 
 ```sh
-cp LICENSE README.md python/pyxel/
-cd python
-nix shell nixpkgs#rustup nixpkgs#cmake --command env \
-  CC=/usr/bin/clang CXX=/usr/bin/clang++ CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang \
-  uvx maturin build -o ../dist --release --features sdl2_static
+mise install
+mise run test    # the pyxel-core tests
+mise run lint    # rustfmt check and clippy
+mise run build   # the wheel for this machine, into dist/
 ```
 
-The Apple clang overrides are needed because a non-Apple `cc` is first on PATH and cannot find `-liconv`.
-Other platforms and the wasm build are not built yet.
+On macOS the tasks use Apple clang, because a non-Apple `cc` earlier on PATH cannot find `-liconv`.
+Other platforms and the wasm build are not built locally yet.
+
+## TODO
+
+- Test vsync in WASM builds. The wasm wheel in `wasm/` is stock 2.9.9, and `wasm/pyxel.js` reads the version
+  with `/pyxel-([\d.]+)-/`, which does not match a `+ne.N` version.

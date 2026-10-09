@@ -116,7 +116,8 @@ impl Graphics {
         SCREEN_FRAGS
             .iter()
             .map(|screen_frag| {
-                Self::build_screen_shader(gl, is_gles, screen_frag).unwrap_or_else(|e| panic!("{e}"))
+                Self::build_screen_shader(gl, is_gles, screen_frag)
+                    .unwrap_or_else(|e| panic!("{e}"))
             })
             .collect()
     }
@@ -685,7 +686,7 @@ impl Pyxel {
     /// Set a float, vec2, vec3, vec4 (1-4 values) or vec4[] (a multiple of 4 values) uniform.
     pub fn set_shader_uniform(&mut self, name: &str, values: &[f32]) -> Result<(), String> {
         let n = values.len();
-        if n == 0 || n > MAX_UNIFORM_FLOATS || (n > 4 && n % 4 != 0) {
+        if n == 0 || n > MAX_UNIFORM_FLOATS || (n > 4 && !n.is_multiple_of(4)) {
             return Err(format!(
                 "uniform '{name}' needs 1-4 values or a multiple of 4 up to {MAX_UNIFORM_FLOATS}, got {n}"
             ));
@@ -695,7 +696,9 @@ impl Pyxel {
         };
         match graphics.user_uniforms.iter_mut().find(|(k, _)| k == name) {
             Some((_, v)) => values.clone_into(v),
-            None => graphics.user_uniforms.push((name.to_string(), values.to_vec())),
+            None => graphics
+                .user_uniforms
+                .push((name.to_string(), values.to_vec())),
         }
         Ok(())
     }
@@ -770,7 +773,8 @@ impl Pyxel {
             if let Some(location) = gl.get_uniform_location(program, &format!("u_image{slot}")) {
                 gl.uniform_1_i32(Some(&location), 2 + slot as i32);
             }
-            if let Some(location) = gl.get_uniform_location(program, &format!("u_imageSize{slot}")) {
+            if let Some(location) = gl.get_uniform_location(program, &format!("u_imageSize{slot}"))
+            {
                 gl.uniform_2_f32(Some(&location), width as f32, height as f32);
             }
         }
@@ -786,7 +790,12 @@ impl Pyxel {
         }
     }
 
-    unsafe fn save_display_capture(&mut self, gl: &mut glow::Context, window_width: u32, window_height: u32) {
+    unsafe fn save_display_capture(
+        &mut self,
+        gl: &mut glow::Context,
+        window_width: u32,
+        window_height: u32,
+    ) {
         let Some((filename, scale)) = self.graphics.as_mut().unwrap().display_capture.take() else {
             return;
         };

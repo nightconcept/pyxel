@@ -206,6 +206,26 @@ pub fn step_frame(fps: u32) {
     with_platform_mut(|platform| platform.step_frame(fps));
 }
 
+// [pyxel-ne] Vsync: the monitor paces the frame loop. The loop reads the flag on every frame.
+
+static VSYNC: AtomicBool = AtomicBool::new(false);
+
+pub fn vsync_enabled() -> bool {
+    VSYNC.load(Ordering::Relaxed)
+}
+
+/// Turn vsync on or off. Returns the swap interval in use: -1 (adaptive), 1, or 0 (none).
+/// Vsync stays off when the interval in use is 0 (headless, a page, or a driver that refuses).
+pub fn set_swap_interval(on: bool) -> i32 {
+    let interval = if is_headless() {
+        0
+    } else {
+        with_platform_mut(|platform| platform.set_swap_interval(on))
+    };
+    VSYNC.store(on && interval != 0, Ordering::Relaxed);
+    interval
+}
+
 #[cfg(not(target_os = "emscripten"))]
 pub(super) fn swap_window() {
     with_platform(Platform::swap_window);

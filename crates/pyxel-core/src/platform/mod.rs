@@ -15,3 +15,5 @@ pub use facade::{
     set_window_title, start_audio, step_frame, ticks, unlock_audio, window_pos, window_size,
     with_gl_context, GlProfile,
 };
+// [pyxel-ne] Vsync
+pub use facade::{set_swap_interval, vsync_enabled};

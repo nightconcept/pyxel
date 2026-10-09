@@ -69,6 +69,16 @@ impl System {
     }
 }
 
+// [pyxel-ne] How many updates the main loop runs before one draw. With vsync on, the monitor paces
+// the loop, so there is no catch-up: one update for each swap.
+fn update_count(delta_ms: f32, frame_ms: f32, vsync: bool) -> u32 {
+    if vsync || delta_ms > MAX_FRAME_DELAY_MS as f32 {
+        1
+    } else {
+        ((delta_ms / frame_ms) as u32).max(1)
+    }
+}
+
 impl Pyxel {
     // Main loop
 
@@ -86,12 +96,8 @@ impl Pyxel {
                 pyxel.system.fps_profiler.start(ticks);
             }
 
-            let update_count = if delta_ms > MAX_FRAME_DELAY_MS as f32 {
-                1
-            } else {
-                (delta_ms / frame_ms) as u32
-            };
-            for _ in 1..update_count {
+            let vsync = platform::vsync_enabled();
+            for _ in 1..update_count(delta_ms, frame_ms, vsync) {
                 Self::run_update_frame(&mut callback);
                 *pyxel::frame_count() += 1;
             }
@@ -288,6 +294,15 @@ impl Pyxel {
 
     pub fn set_screen_mode(&mut self, screen_mode: u32) {
         self.system.screen_mode = screen_mode;
+    }
+
+    // [pyxel-ne] Vsync: returns the swap interval in use (-1, 1, or 0 when vsync is off).
+    pub fn set_vsync(&self, on: bool) -> i32 {
+        platform::set_swap_interval(on)
+    }
+
+    pub fn vsync_enabled() -> bool {
+        platform::vsync_enabled()
     }
 
     pub fn set_fullscreen(&self, enabled: bool) {
@@ -635,5 +650,25 @@ impl Pyxel {
         self.capture_screen();
 
         self.system.draw_profiler.end(platform::ticks());
+    }
+}
+
+// [pyxel-ne] The update count rule of the main loop.
+#[cfg(test)]
+mod tests {
+    use super::update_count;
+
+    #[test]
+    fn test_update_count_catches_up_without_vsync() {
+        assert_eq!(update_count(50.0, 1000.0 / 60.0, false), 3);
+        assert_eq!(update_count(16.0, 1000.0 / 60.0, false), 1);
+        assert_eq!(update_count(500.0, 1000.0 / 60.0, false), 1);
+    }
+
+    #[test]
+    fn test_update_count_is_one_with_vsync_whatever_the_delta() {
+        for delta_ms in [0.0, 4.0, 8.3, 16.7, 50.0, 500.0] {
+            assert_eq!(update_count(delta_ms, 1000.0 / 60.0, true), 1);
+        }
     }
 }
